@@ -32,10 +32,14 @@ function UInt32[String] ComputeGeodesicVoxelBindModifier.getAttributeInteraction
   return result;
 }
 
+
+// We need to add a hashing function the Vec3_i to add it to the dictionary
+// so we do that here
 function UInt32 Vec3_i.hash()
 {
-    return this.x ^ this.y ^ this.z;
+    return this.x.hash() ^ this.y.hash() ^ this.z.hash();
 }
+
 
 //////////////////////////////////////
 // Voxelize
@@ -315,30 +319,36 @@ function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
   // Voxel conversion from hLines to dictionary based
   // (we use dictionary to have sparse entries and perform quick hash lookup)
   Boolean voxels[Vec3_i];
-  Vec4_i hLine;
-  Scalar lineLength;
-  Vec3 lineStart;
-  Scalar numSteps;
-  Vec3 voxelPos;
-  Vec3_i voxelIndex;
-  Scalar cellSize = 1 / cellSizeInv;
-
-  for(Integer i=0; i<hLines.size(); i++)
   {
-    for(Integer j=0; j<hLines[i].size(); j++)
-    {
-        hLine = hLines[i][j];
-        lineStart = Vec3(hLine.x, hLine.y, hLine.z);
-        lineLength = hLine.t;
+    Vec4_i hLine;
+    Scalar lineLength;
+    Vec3 lineStart;
+    Scalar numSteps;
+    Vec3 voxelPos;
+    Vec3_i voxelIndex;
+    Scalar cellSize = 1 / cellSizeInv;
 
-        // Define all voxels for this line.
-        numSteps = lineLength / cellSize;
-        for(Integer x=0; x<numSteps; x++)
-        {
-            voxelPos = lineStart + (x * cellSize);
-            voxelIndex = this.getVoxelIndex(voxelPos, cellSize);
-            voxels[voxelIndex] = true;
-        }
+    for(Integer i=0; i<hLines.size(); i++)
+    {
+      for(Integer j=0; j<hLines[i].size(); j++)
+      {
+          hLine = hLines[i][j];
+          lineStart = Vec3(hLine.x, hLine.y, hLine.z);
+          lineLength = hLine.t;
+
+          numSteps = lineLength; // in voxel-space
+
+          // Voxel-space to world-space
+          lineStart *= cellSize;
+
+          // Define all voxels for this line.
+          for(Integer x=0; x<numSteps; x++)
+          {
+              voxelPos = lineStart + (x * cellSize);
+              voxelIndex = this.getVoxelIndex(voxelPos, cellSize);
+              voxels[voxelIndex] = true;
+          }
+      }
     }
   }
 
@@ -356,6 +366,7 @@ function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
 
   for(Size i=0; i<bones.size(); i++)
   {
+    // Voxel distances for the current bone
     Scalar voxelDistances[Vec3_i] = voxelBoneDistances[i];
     voxelDistances.clear();
 
@@ -371,13 +382,12 @@ function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
     Vec3_i boneVoxelIndex = this.getVoxelIndex(bonePos, cellSizeInv);
     voxelDistances[boneVoxelIndex] = 0; // zero distance for this voxel
 
-    // Iterate all neighbours and increase voxel distance
-    // TODO: Setup a Queue datatype to optimize the First-in-first-out
-    QueueVec3_i queue;
+    // Compute geodesic distance using a form of dijkstra's algorithm
+    // Iterate all neighbours and increase voxel distance as we go
+    QueueVec3_i queue; // first-in-first-out
     queue.enqueue(boneVoxelIndex);
     Integer dist;
     
-    // Compute geodesic distance using a form of dijkstra's algorithm
     while(!queue.isEmpty())
     {
       Vec3_i currentIndex = queue.front();
@@ -391,8 +401,8 @@ function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
             // Neighbour distance is plus one in voxel space
             dist = voxelDistances[currentIndex] + 1;
 
-            // If the stored distance for the bone is higher (eg. infinite) 
-            // currently than the computed weight it means we still have to traverse
+            // If the stored distance for the bone is currently higher (eg. infinite) 
+            // than the computed weight it means we still have to traverse it
             // since it's closer than expected, so set it and add it to the queue
             if (voxelDistances[neighbourIndex] > dist)
             {
