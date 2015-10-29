@@ -4,7 +4,6 @@
 
 require Math;
 require Geometry;
-require RiggingToolbox;
 
 //////////////////////////////////////
 // Factory definition.
@@ -31,6 +30,11 @@ function UInt32[String] ComputeGeodesicVoxelBindModifier.getAttributeInteraction
   result['positions'] = AttrMode_Read;
   result['skinningData'] = AttrMode_Write;
   return result;
+}
+
+function UInt32 Vec3_i.hash()
+{
+    return this.x ^ this.y ^ this.z;
 }
 
 //////////////////////////////////////
@@ -74,7 +78,7 @@ operator ComputeGeodesicVoxelBindModifier_VoxelizeTask<<<index>>>(io Vec4_i[][] 
       break;
 
     // get the position at gloc.
-    Vec3 glocPos = polymesh.getPositionAtLocation(gloc);
+    Vec3 glocPos = mesh.getPositionAtLocation(gloc);
 
     // set newLine's position from gloc and its length to 0.
     Vec4_i newLine;
@@ -97,7 +101,7 @@ operator ComputeGeodesicVoxelBindModifier_VoxelizeTask<<<index>>>(io Vec4_i[][] 
     }
 
     // get the position at gloc.
-    glocPos = polymesh.getPositionAtLocation(gloc);
+    glocPos = mesh.getPositionAtLocation(gloc);
           
     // set newLine's final length (in cells).
     newLine.t =   (floor(glocPos.x * cellSizeInv) - newLine.x)
@@ -130,7 +134,7 @@ operator ComputeGeodesicVoxelBindModifier_VoxelizeTask<<<index>>>(io Vec4_i[][] 
   }
 
   // end spatial query.
-  polymesh.endSpatialQuery(query);
+  mesh.endSpatialQuery(query);
 }
 
 
@@ -141,7 +145,7 @@ function ComputeGeodesicVoxelBindModifier.voxelize(in PolygonMesh mesh,
                                                    Integer acceleration, 
                                                    Boolean threading,
                                                    io Vec4_i hLine[][],
-                                                   out Vec3 bbSize) 
+                                                   io Vec3 bbSize) 
 {
 
   // check.
@@ -216,7 +220,7 @@ function ComputeGeodesicVoxelBindModifier.voxelize(in PolygonMesh mesh,
   }
     
   // do it.
-  Vec4_i hLine[][];  // h-lines (x, y, z is line's starting position, t is line's length, all units in cells).
+  //Vec4_i hLine[][];  // h-lines (x, y, z is line's starting position, t is line's length, all units in cells).
   Vec3   vDir = 0;   // the vector used for raycasting, its length is equal cellSize.
   {
     // calculate the amount of rays in i and j and init the vectors that will be used when casting the rays.
@@ -294,9 +298,9 @@ inline Vec3_i ComputeGeodesicVoxelBindModifier.getVoxelIndex(Vec3 pt, Scalar cel
 /// \internal
 inline Vec3 ComputeGeodesicVoxelBindModifier.getVoxelCenter(Vec3_i voxel_index, Scalar cellSize)
 {
-  return Vec3( (pt.x * cellSize) + 0.5 * cellSize, 
-               (pt.y * cellSize) + 0.5 * cellSize,
-               (pt.z * cellSize) + 0.5 * cellSize);
+  return Vec3( (voxel_index.x * cellSize) + 0.5 * cellSize, 
+               (voxel_index.y * cellSize) + 0.5 * cellSize,
+               (voxel_index.z * cellSize) + 0.5 * cellSize);
 }
 
 // Compute the distance between each bones' position towards all Voxel centers
@@ -385,12 +389,12 @@ function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
         if (voxels.has(neighbourIndex)) // Check if neighbour exists
         {  
             // Neighbour distance is plus one in voxel space
-            dist = voxelBoneDistances[currentIndex] + 1;
+            dist = voxelDistances[currentIndex] + 1;
 
             // If the stored distance for the bone is higher (eg. infinite) 
             // currently than the computed weight it means we still have to traverse
             // since it's closer than expected, so set it and add it to the queue
-            if (voxelBoneDistances[neighbourIndex] > dist)
+            if (voxelDistances[neighbourIndex] > dist)
             {
               voxelDistances[neighbourIndex] = dist;
               queue.enqueue(neighbourIndex);
@@ -406,7 +410,7 @@ function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
 // Compute weights based on the voxelBoneDistances calculated in ComputeGeodesicVoxelBind.computeDistances()
 function ComputeGeodesicVoxelBindModifier.computeWeights(in PolygonMesh mesh,
                                                  in Scalar cellSizeInv, 
-                                                 in Scalar bbSize,
+                                                 in Vec3 bbSize,
                                                  in Scalar voxelBoneDistances[][Vec3_i],
                                                  out Scalar boneVertexWeights[][]
                                                    )
@@ -421,7 +425,7 @@ function ComputeGeodesicVoxelBindModifier.computeWeights(in PolygonMesh mesh,
   Size pointCount = mesh.pointCount();
   Ref<GeometryAttributes> attributes = mesh.getAttributes();
   Vec3Attribute positionsAttribute = attributes.positionsAttribute;
-  Vec3 points = positionsAttribute.values;
+  Vec3 points[] = positionsAttribute.values;
 
   Scalar cellSize = 1 / cellSizeInv;
   Scalar bbExtends = bbSize.x * bbSize.y * bbSize.z;
@@ -439,7 +443,7 @@ function ComputeGeodesicVoxelBindModifier.computeWeights(in PolygonMesh mesh,
         Vec3_i voxelIndex = this.getVoxelIndex(points[j], cellSizeInv);
 
         // Get the calculated distance for the bone in the voxel (in voxel space)
-        Scalar boneDistance = voxelBoneDistances[boneIndex][j];
+        Scalar boneDistance = voxelBoneDistances[boneIndex][voxelIndex];
 
         // Convert to world space size from voxel space
         boneDistance *= cellSize;
@@ -458,7 +462,7 @@ function ComputeGeodesicVoxelBindModifier.computeWeights(in PolygonMesh mesh,
           boneDistance = epsilon;
 
         // Compute the final weights
-        Scalar divisor = ((1 - falloff) * boneDistance) + (falloff * pow(boneDistance, 2)); 
+        Scalar divisor = ((1 - this.falloff) * boneDistance) + (this.falloff * pow(boneDistance, 2)); 
         Scalar weight = pow(1 / divisor, 2);
 
         // Set the vertex weight for this bone
