@@ -5,8 +5,8 @@
     "Math/softClamp.kl",
     "Math/pivotDistanceLimit.kl",
     "Kinematics/solveNCFIK.kl",
-    
-    "Utils/QueueVec3_i.kl",
+
+    "Utils/Queue.kl",
     
     "GeometryStack/Shaders/OGLFlatOverlayShader.kl",
     "GeometryStack/Shaders/OGLVertexColorOverlayShader2.kl",

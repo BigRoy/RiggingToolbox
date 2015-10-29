@@ -1,0 +1,111 @@
+
+
+require Math;
+require Containers;
+
+// A generic abstract Queue that doesn't hold any data
+// it can be inherited from to easily create an object
+// holding your own arbitrary data and use it first-in-first-out
+// See bottom for example of inheriting
+struct Queue
+{
+    UInt32 front;
+    UInt32 rear; 
+    /// \internal
+    UInt32 nexts[]; // points to 'next' index from each index
+    /// \internal
+    IndexPool indexPool;
+};
+
+/// \internal
+function Queue()
+{
+  // Reserve entry 0 as NULL
+	UInt32 dummy;
+	this.nexts.resize(1);
+  this.indexPool.getFreeIndex(dummy);
+  this.front = 0;
+  this.rear = 0;
+}
+
+// Add an element at the end of the queue
+// Creates the storage index; returns key
+function UInt32 Queue.enqueue!()
+{
+  // Get a new key to fill
+  UInt32 key;
+  Boolean needsExpand = this.indexPool.getFreeIndex( key );
+  if (needsExpand)
+     this.nexts.resize( key+1 );
+
+  // If this is the first valid value set it as front.
+  if (this.front == 0)
+  	this.front = key;
+
+  // Store the new key on on the old rear key
+  this.nexts[this.rear] = key;
+
+  // Set the new rear key as rear
+  this.rear = key;
+
+  return key;
+}
+
+// Return the front index key
+function UInt32 Queue.front()
+{
+	if (this.isEmpty())
+		throw("Queue is empty");
+
+	return this.front;
+}
+
+// Remove element at the front of the queue (go to next)
+function Queue.dequeue!()
+{
+	if (this.isEmpty())
+		throw("Queue is empty");
+
+	UInt32 tmp = this.front;
+	this.front = this.nexts[this.front];
+	this.indexPool.unusedIndex(tmp);
+}
+
+// Hard clear this queue
+/// \internal
+function Queue.reset!()
+{
+	// Use only for debugging
+	this.indexPool.reset();
+	this.front = 0;
+	this.rear = 0;
+
+	// Reserve entry 0 as NULL
+	UInt32 dummy;
+	this.nexts.resize(1);
+  this.indexPool.getFreeIndex(dummy);
+}
+
+function Boolean Queue.isEmpty()
+{
+  return (this.front == 0);
+}
+
+
+// Define QueueVec3_i Queue type for the voxels in GeodesicVoxelBind modifier
+struct QueueVec3_i : Queue {
+  Vec3_i data[];
+};
+
+function QueueVec3_i.enqueue!( Vec3_i value ) {
+  UInt32 index = this.parent.enqueue(); // creates the storage index; returns key
+  if( index >= this.data.size() )
+    this.data.resize( index+1 );
+
+  this.data[index] = value;
+}
+
+inline Vec3_i QueueVec3_i.front(){
+  UInt32 index = this.parent.front();
+  return this.data[index];
+}
