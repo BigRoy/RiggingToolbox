@@ -143,13 +143,21 @@ operator ComputeGeodesicVoxelBindModifier_VoxelizeTask<<<index>>>(io Vec4_i[][] 
 
 
 /// Borrowed from Voxelize preset node in FE 2.0
+/// \dfgPresetDefault threading true
+
+// Outputs:
+//  hLine: x, y, z is line's starting position, t is line's length, all units in cells.
+//  bbSize: Bounding Box extends of the Voxel structure
+//  vDir: The raycast direction of the lines in hLine. The vector used for raycasting, its length is equal cellSize.
+
 function ComputeGeodesicVoxelBindModifier.voxelize(in PolygonMesh mesh,
                                                    Scalar detail, 
                                                    Integer projection, 
                                                    Integer acceleration, 
                                                    Boolean threading,
-                                                   io Vec4_i hLine[][],
-                                                   io Vec3 bbSize) 
+                                                   out Vec4_i hLine[][], 
+                                                   out Vec3 bbSize,
+                                                   out Vec3 vDir) 
 {
 
   // check.
@@ -223,9 +231,7 @@ function ComputeGeodesicVoxelBindModifier.voxelize(in PolygonMesh mesh,
     }            
   }
     
-  // do it.
-  //Vec4_i hLine[][];  // h-lines (x, y, z is line's starting position, t is line's length, all units in cells).
-  Vec3   vDir = 0;   // the vector used for raycasting, its length is equal cellSize.
+  // Define ray directions and steps
   {
     // calculate the amount of rays in i and j and init the vectors that will be used when casting the rays.
     UInt32 numRayi;
