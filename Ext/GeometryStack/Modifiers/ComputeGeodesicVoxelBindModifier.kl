@@ -4,10 +4,10 @@
 
 require Math;
 require Geometry;
+require RiggingToolbox;
 
 //////////////////////////////////////
 // Factory definition.
-
 object ComputeGeodesicVoxelBindModifierFactory : GeometryOperatorFactory {
 };
 
@@ -18,7 +18,7 @@ function GeometryOperator ComputeGeodesicVoxelBindModifierFactory.constructGeome
 
 
 //////////////////////////////////////
-//
+// ComputeGeodesicVoxelBindModifier
 
 // Based roughly on http://www.delasa.net/data/sca2013_voxelization.pdf
 object ComputeGeodesicVoxelBindModifier : BaseModifier {
@@ -281,6 +281,7 @@ function ComputeGeodesicVoxelBindModifier.voxelize(in PolygonMesh mesh,
 //////////////////////////////////////
 // Compute Bone Voxel Distances
 
+// Get the voxel space index for a world space position
 /// \internal
 inline Vec3_i ComputeGeodesicVoxelBindModifier.getVoxelIndex(Vec3 pt, Scalar cellSizeInv)
 {
@@ -289,28 +290,51 @@ inline Vec3_i ComputeGeodesicVoxelBindModifier.getVoxelIndex(Vec3 pt, Scalar cel
                  floor(pt.z * cellSizeInv) );
 }
 
+// Get the voxel's center position in world space from a voxel space index
 /// \internal
-inline Vec3 ComputeGeodesicVoxelBindModifier.getVoxelCenter(Vec3_i voxel_index, Scalar cellSizeInv)
+inline Vec3 ComputeGeodesicVoxelBindModifier.getVoxelCenter(Vec3_i voxel_index, Scalar cellSize)
 {
-  // TODO: Implement ComputeGeodesicVoxelBind.toVoxelCenter
-  return Vec3();
+  return Vec3( (pt.x * cellSize) + 0.5 * cellSize, 
+               (pt.y * cellSize) + 0.5 * cellSize,
+               (pt.z * cellSize) + 0.5 * cellSize);
 }
 
 // Compute the distance between each bones' position towards all Voxel centers
 // with a form of Dijkstra's algorithm
-function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][], 
-                                                   Mat44 bones[], 
-                                                   Scalar cellSizeInv, 
-                                                   out Scalar voxelBoneDistances[][Vec3_i])
+function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
+                                                           Vec3 lineDirection,
+                                                           Mat44 bones[], 
+                                                           Scalar cellSizeInv, 
+                                                           out Scalar voxelBoneDistances[][Vec3_i])
 {
 
-  // Voxel conversion (we use dictionary to have sparse entries and perform quick hash lookup)
+  // Voxel conversion from hLines to dictionary based
+  // (we use dictionary to have sparse entries and perform quick hash lookup)
   Boolean voxels[Vec3_i];
+  Vec4_i hLine;
+  Scalar lineLength;
+  Vec3 lineStart;
+  Scalar numSteps;
+  Vec3 voxelPos;
+  Vec3_i voxelIndex;
+  Scalar cellSize = 1 / cellSizeInv;
+
   for(Integer i=0; i<hLines.size(); i++)
   {
     for(Integer j=0; j<hLines[i].size(); j++)
     {
-        // TODO: Perform conversion from hLines to dictionary voxel structure.
+        hLine = hLines[i][j];
+        lineStart = Vec3(hLine.x, hLine.y, hLine.z);
+        lineLength = hLine.t;
+
+        // Define all voxels for this line.
+        numSteps = lineLength / cellSize;
+        for(Integer x=0; x<numSteps; x++)
+        {
+            voxelPos = lineStart + (x * cellSize);
+            voxelIndex = this.getVoxelIndex(voxelPos, cellSize);
+            voxels[voxelIndex] = true;
+        }
     }
   }
 
@@ -329,7 +353,7 @@ function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
   for(Size i=0; i<bones.size(); i++)
   {
     Scalar voxelDistances[Vec3_i] = voxelBoneDistances[i];
-    voxelDistances.clear()
+    voxelDistances.clear();
 
     // Initialize voxel distance values to infinite
     for(key in voxels)
@@ -345,21 +369,23 @@ function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
 
     // Iterate all neighbours and increase voxel distance
     // TODO: Setup a Queue datatype to optimize the First-in-first-out
-    Queue queue;
+    QueueVec3_i queue;
     queue.enqueue(boneVoxelIndex);
     Integer dist;
     
     // Compute geodesic distance using a form of dijkstra's algorithm
     while(!queue.isEmpty())
     {
-      Vec3_i currentIndex = queue.dequeue(); // pop from queue
+      Vec3_i currentIndex = queue.front();
+      queue.dequeue(); // pop from queue
+
       for(Size x=0; x<neighbours.size(); x++)
       {
         Vec3_i neighbourIndex = currentIndex + neighbours[x];
-        if voxels.has(neighbourIndex) // Check if neighbour exists
+        if (voxels.has(neighbourIndex)) // Check if neighbour exists
         {  
             // Neighbour distance is plus one in voxel space
-            dist = voxelBoneDistances[currentIndex] + 1
+            dist = voxelBoneDistances[currentIndex] + 1;
 
             // If the stored distance for the bone is higher (eg. infinite) 
             // currently than the computed weight it means we still have to traverse
@@ -405,7 +431,7 @@ function ComputeGeodesicVoxelBindModifier.computeWeights(in PolygonMesh mesh,
   for(Size boneIndex = 0; boneIndex<voxelBoneDistances.size(); boneIndex++)
   {
      Scalar vertexWeights[] = boneVertexWeights[boneIndex];
-     vertexWeights.resize(pointCount)
+     vertexWeights.resize(pointCount);
      
      for(Size j=0; j<pointCount; j++)
      {
@@ -416,7 +442,7 @@ function ComputeGeodesicVoxelBindModifier.computeWeights(in PolygonMesh mesh,
         Scalar boneDistance = voxelBoneDistances[boneIndex][j];
 
         // Convert to world space size from voxel space
-        boneDistance *= cellSize        
+        boneDistance *= cellSize;
 
         // To compensate for the voxel grid’s coarseness, and the fact that multiple vertices
         // may fall in the same voxel, we add the distance between vertex position
