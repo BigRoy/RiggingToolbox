@@ -36,13 +36,13 @@ function UInt32 Queue.enqueue!()
   UInt32 key;
   Boolean needsExpand = this.indexPool.getFreeIndex( key );
   if (needsExpand)
-     this.nexts.resize( key+1 );
+     this.nexts.resize( this.nexts.size()+1 );
 
   // If this is the first valid value set it as front.
   if (this.front == 0)
   	this.front = key;
 
-  // Store the new key on on the old rear key
+  // Store the new key on the old rear key
   this.nexts[this.rear] = key;
 
   // Set the new rear key as rear
@@ -65,10 +65,20 @@ function Queue.dequeue!()
 {
 	if (this.isEmpty())
 		throw("Queue is empty");
+  
+  UInt32 tmp = this.front;
+  this.indexPool.unusedIndex(tmp);
 
-	UInt32 tmp = this.front;
-	this.front = this.nexts[this.front];
-	this.indexPool.unusedIndex(tmp);
+  // If we're at the rear of the queue we ran empty
+  if (this.front == this.rear)
+  {
+    this.front = 0;
+    this.rear = 0;
+  }
+  else 
+  {
+    this.front = this.nexts[this.front];
+  }
 }
 
 // Hard clear this queue
