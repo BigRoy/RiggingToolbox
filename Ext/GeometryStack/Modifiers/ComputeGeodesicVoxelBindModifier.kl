@@ -308,9 +308,9 @@ inline Vec3_i ComputeGeodesicVoxelBindModifier.getVoxelIndex(Vec3 pt, Scalar cel
 /// \internal
 inline Vec3 ComputeGeodesicVoxelBindModifier.getVoxelCenter(Vec3_i voxel_index, Scalar cellSize)
 {
-  return Vec3( (voxel_index.x * cellSize) + 0.5 * cellSize, 
-               (voxel_index.y * cellSize) + 0.5 * cellSize,
-               (voxel_index.z * cellSize) + 0.5 * cellSize);
+  return Vec3( (voxel_index.x * cellSize) + (0.5 * cellSize), 
+               (voxel_index.y * cellSize) + (0.5 * cellSize),
+               (voxel_index.z * cellSize) + (0.5 * cellSize));
 }
 
 // Compute the distance between each bones' position towards all Voxel centers
@@ -327,31 +327,25 @@ function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
   Boolean voxels[Vec3_i];
   {
     Vec4_i hLine;
-    Scalar lineLength;
-    Vec3 lineStart;
-    Scalar numSteps;
-    Vec3 voxelPos;
-    Vec3_i voxelIndex;
-    Scalar cellSize = 1 / cellSizeInv;
+    Scalar numCells;
+    Vec3_i voxelIndexStart; // voxel index of start of line
+    Vec3_i voxelIndex; // voxel index of voxels in the line
+
+    // Normalized line direction as integer vector in cell/voxel space
+    Vec3 v = lineDirection.unit();
+    Vec3_i directionCell(v.x, v.y, v.z);
 
     for(Integer i=0; i<hLines.size(); i++)
     {
       for(Integer j=0; j<hLines[i].size(); j++)
       {
           hLine = hLines[i][j];
-          lineStart = Vec3(hLine.x, hLine.y, hLine.z);
-          lineLength = hLine.t;
-
-          numSteps = lineLength; // in voxel-space
-
-          // Voxel-space to world-space
-          lineStart *= cellSize;
-
+          voxelIndexStart = Vec3_i(hLine.x, hLine.y, hLine.z);
+          numCells = hLine.t;
           // Define all voxels for this line.
-          for(Integer x=0; x<numSteps; x++)
+          for(Integer x=0; x<numCells; x++)
           {
-              voxelPos = lineStart + (x * cellSize);
-              voxelIndex = this.getVoxelIndex(voxelPos, cellSize);
+              voxelIndex = voxelIndexStart + (x * directionCell);
               voxels[voxelIndex] = true;
           }
       }
@@ -373,8 +367,7 @@ function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
   for(Size i=0; i<bones.size(); i++)
   {
     // Voxel distances for the current bone
-    Scalar voxelDistances[Vec3_i] = voxelBoneDistances[i];
-    voxelDistances.clear();
+    Scalar voxelDistances[Vec3_i];
 
     // Initialize voxel distance values to infinite
     for(key in voxels)
@@ -392,21 +385,21 @@ function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
     // Iterate all neighbours and increase voxel distance as we go
     QueueVec3_i queue; // first-in-first-out
     queue.enqueue(boneVoxelIndex);
-    Integer dist;
-    
+
+    Integer dist; 
     while(!queue.isEmpty())
     {
       Vec3_i currentIndex = queue.front();
       queue.dequeue(); // pop from queue
+
+      // Neighbour distance is plus one in voxel space
+      dist = voxelDistances[currentIndex] + 1;
 
       for(Size x=0; x<neighbours.size(); x++)
       {
         Vec3_i neighbourIndex = currentIndex + neighbours[x];
         if (voxels.has(neighbourIndex)) // Check if neighbour exists
         {  
-            // Neighbour distance is plus one in voxel space
-            dist = voxelDistances[currentIndex] + 1;
-
             // If the stored distance for the bone is currently higher (eg. infinite) 
             // than the computed weight it means we still have to traverse it
             // since it's closer than expected, so set it and add it to the queue
@@ -418,6 +411,9 @@ function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
         }
       }
     }
+
+    // Assign the distances for this bones
+    voxelBoneDistances[i] = voxelDistances;
   }
 }
 
@@ -446,20 +442,31 @@ function ComputeGeodesicVoxelBindModifier.computeWeights(in PolygonMesh mesh,
   Scalar cellSize = 1 / cellSizeInv;
   Scalar bbExtends = bbSize.x * bbSize.y * bbSize.z;
 
+  Scalar voxelDistances[Vec3_i];
+
   // For each bone go through all vertices, find their voxel and set the
   // weights using the calculated geodesic voxelBoneDistances
   for(Size boneIndex = 0; boneIndex<voxelBoneDistances.size(); boneIndex++)
   {
      Scalar vertexWeights[] = boneVertexWeights[boneIndex];
      vertexWeights.resize(pointCount);
+
+     voxelDistances = voxelBoneDistances[boneIndex];
      
      for(Size j=0; j<pointCount; j++)
      {
         // Get voxel for point
         Vec3_i voxelIndex = this.getVoxelIndex(points[j], cellSizeInv);
 
+        if (!voxelDistances.has(voxelIndex))
+        {
+          report("Warning: Vertex' voxel index is not in the Voxel Space bounding box.");
+          vertexWeights[j] = 0;
+          continue;
+        }
+        
         // Get the calculated distance for the bone in the voxel (in voxel space)
-        Scalar boneDistance = voxelBoneDistances[boneIndex][voxelIndex];
+        Scalar boneDistance = voxelDistances[voxelIndex];
 
         // Convert to world space size from voxel space
         boneDistance *= cellSize;
@@ -467,7 +474,7 @@ function ComputeGeodesicVoxelBindModifier.computeWeights(in PolygonMesh mesh,
         // To compensate for the voxel grid’s coarseness, and the fact that multiple vertices
         // may fall in the same voxel, we add the distance between vertex position
         // and voxel center.
-        Vec3 voxelCenter = this.getVoxelCenter(voxelIndex, cellSizeInv);
+        Vec3 voxelCenter = this.getVoxelCenter(voxelIndex, cellSize);
         boneDistance += voxelCenter.distanceTo(points[j]);
 
         // Normalize by bounding box extends
