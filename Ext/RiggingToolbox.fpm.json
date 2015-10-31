@@ -7,6 +7,7 @@
     "Kinematics/solveNCFIK.kl",
 
     "Utils/Queue.kl",
+    "Utils/Voxelizer.kl",
     
     "GeometryStack/Shaders/OGLFlatOverlayShader.kl",
     "GeometryStack/Shaders/OGLVertexColorOverlayShader2.kl",

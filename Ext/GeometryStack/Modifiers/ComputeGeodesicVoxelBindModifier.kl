@@ -32,326 +32,16 @@ function UInt32[String] ComputeGeodesicVoxelBindModifier.getAttributeInteraction
   return result;
 }
 
-
-// We need to add a hashing function the Vec3_i to add it to the dictionary
-// so we do that here
-function UInt32 Vec3_i.hash()
-{
-    return this.x.hash() ^ this.y.hash() ^ this.z.hash();
-}
-
-
-//////////////////////////////////////
-// Voxelize
-
-/// Borrowed from Voxelize preset node in FE 2.0
-/// \internal
-operator ComputeGeodesicVoxelBindModifier_VoxelizeTask<<<index>>>(io Vec4_i[][] hLine,
-                                                                  PolygonMesh   mesh,
-                                                                  Float32       cellSizeInv,
-                                                                  UInt32        numRayi,
-                                                                  Vec3          vDir,
-                                                                  Vec3          vPosStart,
-                                                                  Vec3          vPosStartAddi,
-                                                                  Vec3          vPosStartAddj)
-{
-  const Float32 epsilon = 0.001;
-
-  // begin spatial query.
-  Ref<SpatialQuery> query = mesh.beginSpatialQuery();
-
-  // split index into row/column.
-  UInt32 rayj = index / numRayi;
-  UInt32 rayi = index - rayj * numRayi;
-    
-  // calculate ray's starting position.
-  Vec3 rayPos = vPosStart + rayi * vPosStartAddi + rayj * vPosStartAddj;
-
-  // declare and init security counter (to avoid a possible infinite loop due to rounding errors).
-  UInt32 security = 1;
-
-  // ray cast.
-  while (true)
-  {
-    // get the intersection.
-    Ray ray(rayPos, vDir);
-    GeometryLocation gloc = query.raycast(ray, true, 0, SCALAR_INFINITE);
-
-    // no hit?
-    if (!gloc.isValid())
-      break;
-
-    // get the position at gloc.
-    Vec3 glocPos = mesh.getPositionAtLocation(gloc);
-
-    // set newLine's position from gloc and its length to 0.
-    Vec4_i newLine;
-    newLine.x = floor(glocPos.x * cellSizeInv);
-    newLine.y = floor(glocPos.y * cellSizeInv);
-    newLine.z = floor(glocPos.z * cellSizeInv);
-    newLine.t = 0;
-
-    // calculate ray's starting position for the second ray cast.
-    rayPos = glocPos + epsilon * vDir;
-    ray.set(rayPos, vDir);
-    gloc = query.raycast(ray, true, 0, SCALAR_INFINITE);
-
-    // no hit?
-    if (!gloc.isValid())
-    {
-      // add newLine to hLine and break.
-      hLine[index].push(newLine);
-      break;
-    }
-
-    // get the position at gloc.
-    glocPos = mesh.getPositionAtLocation(gloc);
-          
-    // set newLine's final length (in cells).
-    newLine.t =   (floor(glocPos.x * cellSizeInv) - newLine.x)
-                + (floor(glocPos.y * cellSizeInv) - newLine.y)
-                + (floor(glocPos.z * cellSizeInv) - newLine.z);
-
-    // perform security check, calculate next ray's starting position and add newLine to hLine.
-    if (newLine.t > 1)
-    {
-      security = 1;
-      rayPos = glocPos + epsilon * vDir;
-      hLine[index].push(newLine);
-    }
-    else
-    {
-      // is newLine identical with the last line in hLine?
-      if (hLine[index].size() > 0 && newLine == hLine[index][hLine[index].size() - 1])
-      {
-        // increase the security and ignore newLine (i.e. don't add it to hLine).
-        security++;
-        rayPos = glocPos + epsilon * Float32(security) * vDir;
-      }
-      else
-      {
-        security = 1;
-        rayPos = glocPos + epsilon * vDir;
-        hLine[index].push(newLine);
-      }
-    }
-  }
-
-  // end spatial query.
-  mesh.endSpatialQuery(query);
-}
-
-
-/// Borrowed from Voxelize preset node in FE 2.0
-/// \dfgPresetDefault threading true
-
-// Outputs:
-//  hLine: x, y, z is line's starting position, t is line's length, all units in cells.
-//  bbSize: Bounding Box extends of the Voxel structure
-//  vDir: The raycast direction of the lines in hLine. The vector used for raycasting, its length is equal cellSize.
-
-function ComputeGeodesicVoxelBindModifier.voxelize(in PolygonMesh mesh,
-                                                   Scalar detail, 
-                                                   Integer projection, 
-                                                   Integer acceleration, 
-                                                   Boolean threading,
-                                                   out Vec4_i hLine[][], 
-                                                   out Vec3 bbSize,
-                                                   out Vec3 vDir) 
-{
-
-  // check.
-  if ( detail < DIVIDEPRECISION
-      || mesh == null
-      || mesh.polygonCount() <= 0
-      || mesh.triangleCount() <= 0)
-    return;
-
-  // convert detail into cell size.
-  Float32 cellSize    = 1.0 / detail;
-  Float32 cellSizeInv = detail; // similar to (1.0 / cellSize)
-
-  // get the bounding box of the mesh and snap its corners to the grid defined by cellSize.
-  Vec3 bbMin;
-  Vec3 bbMax;
-  //Vec3 bbSize; 
-  {
-    // get the bounding box corners.
-    LocalBoundingVolume bvol = mesh.getBoundingVolume();
-    bbMin = bvol.bBoxGetMin();
-    bbMax = bvol.bBoxGetMax();
-
-    // snap bbmin to grid.
-    bbMin  *= cellSizeInv;
-    bbMin.x = floor(bbMin.x);
-    bbMin.y = floor(bbMin.y);
-    bbMin.z = floor(bbMin.z);
-    bbMin  *= cellSize;
-
-    // snap bbmax to grid.
-    bbMax  *= cellSizeInv;
-    bbMax.x = ceil(bbMax.x);
-    bbMax.y = ceil(bbMax.y);
-    bbMax.z = ceil(bbMax.z);
-    bbMax  *= cellSize;
-  
-    // calculate size.
-    bbSize = bbMax - bbMin;
-
-    // bounding box no good?
-    if (   bbSize.x <= 0
-        || bbSize.y <= 0
-        || bbSize.z <= 0)
-      return;
-  }
-  
-  // determine the plane for the ray casting.
-  const Integer PLANE_XY = 1;
-  const Integer PLANE_XZ = 2;
-  const Integer PLANE_ZY = 3;
-  Integer raycastPlane;
-  switch (projection)
-  {
-    case PLANE_XY:
-    case PLANE_XZ:
-    case PLANE_ZY:
-    {
-      raycastPlane = projection;
-      break;
-    }
-    default:
-    {
-      Float32 bbAreaXY = bbSize.x * bbSize.y;
-      Float32 bbAreaXZ = bbSize.x * bbSize.z;
-      Float32 bbAreaZY = bbSize.z * bbSize.y;
-      if      (bbAreaXY <= bbAreaXZ && bbAreaXY <= bbAreaZY)  raycastPlane = PLANE_XY;
-      else if (bbAreaXZ <= bbAreaXY && bbAreaXZ <= bbAreaZY)  raycastPlane = PLANE_XZ;
-      else                                                    raycastPlane = PLANE_ZY;
-      break;
-    }            
-  }
-    
-  // Define ray directions and steps
-  {
-    // calculate the amount of rays in i and j and init the vectors that will be used when casting the rays.
-    UInt32 numRayi;
-    UInt32 numRayj;
-    Vec3 vPosStart     = bbMin;
-    Vec3 vPosStartAddi = 0;
-    Vec3 vPosStartAddj = 0;
-    switch (raycastPlane)
-    {
-      case PLANE_XY:
-        numRayi = round(bbSize.x * cellSizeInv);
-        numRayj = round(bbSize.y * cellSizeInv);
-        vDir         .z = cellSize;
-        vPosStartAddi.x = cellSize;
-        vPosStartAddj.y = cellSize;
-        vPosStart    .z = vPosStart.z - cellSize;
-        break;
-      case PLANE_XZ:
-        numRayi = round(bbSize.x * cellSizeInv);
-        numRayj = round(bbSize.z * cellSizeInv);
-        vDir         .y = cellSize;
-        vPosStartAddi.x = cellSize;
-        vPosStart    .y = vPosStart.y - cellSize;
-        vPosStartAddj.z = cellSize;
-        break;
-      default:
-        numRayi = round(bbSize.z * cellSizeInv);
-        numRayj = round(bbSize.y * cellSizeInv);
-        vDir         .x = cellSize;
-        vPosStart    .x = vPosStart.x - cellSize;
-        vPosStartAddj.y = cellSize;
-        vPosStartAddi.z = cellSize;
-        break;
-    }
-    vPosStart += 0.5 * (vPosStartAddi + vPosStartAddj);
-
-    // init/set hLine[][].
-    hLine.resize(numRayi * numRayj);
-
-    // prepare mesh for spatial queries.
-    GenericValueContainer options = GenericValueContainer();
-    if (acceleration == 0)  PrepareForSpatialQueries_setOctree    (options);
-    else                    PrepareForSpatialQueries_setSparseGrid(options);
-    mesh.prepareForSpatialQueries(numRayi * numRayj, options);
-    
-    // fill hLine.
-    if (threading || (!threading && hLine.size() < 32))
-    {
-      // singlethreaded.
-      for (UInt32 i=0;i<hLine.size();i++)
-        ComputeGeodesicVoxelBindModifier_VoxelizeTask(i, hLine, mesh, cellSizeInv, numRayi, vDir, vPosStart, vPosStartAddi, vPosStartAddj);
-    }
-    else
-    {
-      // multithreaded.
-      ComputeGeodesicVoxelBindModifier_VoxelizeTask<<<hLine.size()>>>(hLine, mesh, cellSizeInv, numRayi, vDir, vPosStart, vPosStartAddi, vPosStartAddj);
-    }
-  }
-}
-
 //////////////////////////////////////
 // Compute Bone Voxel Distances
 
-// Get the voxel space index for a world space position
-/// \internal
-inline Vec3_i ComputeGeodesicVoxelBindModifier.getVoxelIndex(Vec3 pt, Scalar cellSizeInv)
-{
-  return Vec3_i( floor(pt.x * cellSizeInv), 
-                 floor(pt.y * cellSizeInv),
-                 floor(pt.z * cellSizeInv) );
-}
-
-// Get the voxel's center position in world space from a voxel space index
-/// \internal
-inline Vec3 ComputeGeodesicVoxelBindModifier.getVoxelCenter(Vec3_i voxel_index, Scalar cellSize)
-{
-  return Vec3( (voxel_index.x * cellSize) + (0.5 * cellSize), 
-               (voxel_index.y * cellSize) + (0.5 * cellSize),
-               (voxel_index.z * cellSize) + (0.5 * cellSize));
-}
-
 // Compute the distance between each bones' position towards all Voxel centers
 // with a form of Dijkstra's algorithm
-function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
-                                                           Vec3 lineDirection,
-                                                           Mat44 bones[], 
-                                                           Scalar cellSizeInv, 
+function ComputeGeodesicVoxelBindModifier.computeDistances(Voxelizer voxelizer,
+                                                           Boolean voxels[Vec3_i],
+                                                           Mat44 bones[],
                                                            out Scalar voxelBoneDistances[][Vec3_i])
 {
-
-  // Voxel conversion from hLines to dictionary based
-  // (we use dictionary to have sparse entries and perform quick hash lookup)
-  Boolean voxels[Vec3_i];
-  {
-    Vec4_i hLine;
-    Scalar numCells;
-    Vec3_i voxelIndexStart; // voxel index of start of line
-    Vec3_i voxelIndex; // voxel index of voxels in the line
-
-    // Normalized line direction as integer vector in cell/voxel space
-    Vec3 v = lineDirection.unit();
-    Vec3_i directionCell(v.x, v.y, v.z);
-
-    for(Integer i=0; i<hLines.size(); i++)
-    {
-      for(Integer j=0; j<hLines[i].size(); j++)
-      {
-          hLine = hLines[i][j];
-          voxelIndexStart = Vec3_i(hLine.x, hLine.y, hLine.z);
-          numCells = hLine.t;
-          // Define all voxels for this line.
-          for(Integer x=0; x<numCells; x++)
-          {
-              voxelIndex = voxelIndexStart + (x * directionCell);
-              voxels[voxelIndex] = true;
-          }
-      }
-    }
-  }
-
   // Predefined set of neighbour offsets used to easily
   // iterate towards each neighbour voxel
   Vec3_i neighbours[6];
@@ -378,7 +68,7 @@ function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
     // Identify the voxel intersecting the bone (skeleton) and
     // set this distance to zero
     Vec3 bonePos = bones[i].translation();
-    Vec3_i boneVoxelIndex = this.getVoxelIndex(bonePos, cellSizeInv);
+    Vec3_i boneVoxelIndex = voxelizer.getVoxelIndex(bonePos);
     voxelDistances[boneVoxelIndex] = 0; // zero distance for this voxel
 
     // Compute geodesic distance using a form of dijkstra's algorithm
@@ -420,11 +110,12 @@ function ComputeGeodesicVoxelBindModifier.computeDistances(Vec4_i hLines[][],
 
 //////////////////////////////////////
 // Compute weights based on the voxelBoneDistances calculated in ComputeGeodesicVoxelBind.computeDistances()
-function ComputeGeodesicVoxelBindModifier.computeWeights(in PolygonMesh mesh,
-                                                 in Scalar cellSizeInv, 
-                                                 in Vec3 bbSize,
-                                                 in Scalar voxelBoneDistances[][Vec3_i],
-                                                 out Scalar boneVertexWeights[][]
+function ComputeGeodesicVoxelBindModifier.computeWeights(in Voxelizer voxelizer,
+                                                         in PolygonMesh mesh,
+                                                         in Scalar cellSizeInv, 
+                                                         in Vec3 bbSize,
+                                                         in Scalar voxelBoneDistances[][Vec3_i],
+                                                         out Scalar boneVertexWeights[][]
                                                    )
 {
 
@@ -439,7 +130,7 @@ function ComputeGeodesicVoxelBindModifier.computeWeights(in PolygonMesh mesh,
   Vec3Attribute positionsAttribute = attributes.positionsAttribute;
   Vec3 points[] = positionsAttribute.values;
 
-  Scalar cellSize = 1 / cellSizeInv;
+  Scalar cellSize = voxelizer.cellSize;
   Scalar bbExtends = bbSize.x * bbSize.y * bbSize.z;
 
   Scalar voxelDistances[Vec3_i];
@@ -456,11 +147,12 @@ function ComputeGeodesicVoxelBindModifier.computeWeights(in PolygonMesh mesh,
      for(Size j=0; j<pointCount; j++)
      {
         // Get voxel for point
-        Vec3_i voxelIndex = this.getVoxelIndex(points[j], cellSizeInv);
+        Vec3_i voxelIndex = voxelizer.getVoxelIndex(points[j]);
 
         if (!voxelDistances.has(voxelIndex))
         {
-          report("Warning: Vertex' voxel index is not in the Voxel Space bounding box.");
+          // This should never happen. All vertices should be in the voxels.
+          report("Warning: Vertex' voxel index " + voxelIndex + " is not in the voxelBoneDistances.");
           vertexWeights[j] = 0;
           continue;
         }
@@ -474,10 +166,10 @@ function ComputeGeodesicVoxelBindModifier.computeWeights(in PolygonMesh mesh,
         // To compensate for the voxel grid’s coarseness, and the fact that multiple vertices
         // may fall in the same voxel, we add the distance between vertex position
         // and voxel center.
-        Vec3 voxelCenter = this.getVoxelCenter(voxelIndex, cellSize);
+        Vec3 voxelCenter = voxelizer.getVoxelCenter(voxelIndex);
         boneDistance += voxelCenter.distanceTo(points[j]);
 
-        // Normalize by bounding box extends
+        // Normalize by bounding box extends (world space)
         boneDistance /= bbExtends;
 
         // Avoid division by zero
@@ -485,8 +177,8 @@ function ComputeGeodesicVoxelBindModifier.computeWeights(in PolygonMesh mesh,
           boneDistance = epsilon;
 
         // Compute the final weights
-        Scalar divisor = ((1 - this.falloff) * boneDistance) + (this.falloff * pow(boneDistance, 2)); 
-        Scalar weight = pow(1 / divisor, 2);
+        Scalar divisor = ((1.0 - this.falloff) * boneDistance) + (this.falloff * pow(boneDistance, 2)); 
+        Scalar weight = pow(1.0 / divisor, 2);
 
         // Set the vertex weight for this bone
         vertexWeights[j] = weight;
