@@ -340,3 +340,71 @@ function Voxelizer.linesToVoxels(Vec4_i hLines[][],
     }
   }
 }
+
+// Creates an Xfo array for each voxel in the hitlines
+function Voxelizer.createXfos(Vec4_i hitlines[][],
+                              Vec3 lineDirection,
+                              out Xfo xfo[])
+{
+  // count the total amount of xfo.
+  UInt32 count = 0;
+  for (UInt32 i=0;i<hitlines.size();i++)
+    for (UInt32 j=0;j<hitlines[i].size();j++)
+      count += hitlines[i][j].t + 1;
+
+  // resize and fill output.
+  xfo.resize(count);
+  count = 0;
+  for (UInt32 i=0;i<hitlines.size();i++)
+  {
+    for (UInt32 j=0;j<hitlines[i].size();j++)
+    {
+      Vec3 p;
+      p.x = this.cellSize * (0.5 + Float32(hitlines[i][j].x));
+      p.y = this.cellSize * (0.5 + Float32(hitlines[i][j].y));
+      p.z = this.cellSize * (0.5 + Float32(hitlines[i][j].z));
+
+      for (UInt32 k=0;k<=hitlines[i][j].t;k++,count++)
+      {
+        xfo[count].ori = Quat();
+        xfo[count].sc  = this.cellSize;
+        xfo[count].tr  = p;
+        p += lineDirection;
+      }
+    }
+  }
+
+}
+
+// Creates a Lines object based on the hitlines
+// Note that lines is `io` so that we can re-use an existing object
+// change the points and perform 'incrementPositionsVersion()' instead
+// of creating a new object each time
+function Voxelizer.createLines(Vec4_i hitlines[][],
+                              Vec3 lineDirection,
+                              io Lines lines)
+{
+  // count the total amount of lines.
+  UInt32 count = 0;
+  for (UInt32 i=0;i<hitlines.size();i++)
+    count += hitlines[i].size();
+
+  // fill output.
+  lines.addPoints(2 * count);
+  count = 0;
+  for (UInt32 i=0;i<hitlines.size();i++)
+  {
+    for (UInt32 j=0;j<hitlines[i].size();j++,count+=2)
+    {
+      Vec3 p;
+      p.x = this.cellSize * (0.5 + Float32(hitlines[i][j].x));
+      p.y = this.cellSize * (0.5 + Float32(hitlines[i][j].y));
+      p.z = this.cellSize * (0.5 + Float32(hitlines[i][j].z));
+      lines.setPosition(count + 0, p);
+      lines.setPosition(count + 1, p + Float32(hitlines[i][j].t) * lineDirection);
+      lines.addLine(count, count + 1);
+    }
+  }
+
+  lines.incrementPositionsVersion();
+}
